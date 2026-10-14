@@ -12,6 +12,25 @@
   if (window.__zulfaLoaded) { window.__zulfaShow && window.__zulfaShow(); return; }
   window.__zulfaLoaded = true;
 
+  /* ================= Trusted Types (Google CSP) ================= */
+  let TT = null;
+  try {
+    if (window.trustedTypes && window.trustedTypes.createPolicy) {
+      TT = window.trustedTypes.createPolicy("zulfa", { createHTML: (s) => s, createScriptURL: (s) => s, createScript: (s) => s });
+    }
+  } catch {}
+  const setHTML = (el, html) => {
+    if (!el) return;
+    if (TT) { el.innerHTML = TT.createHTML(String(html)); return; }
+    try { el.innerHTML = String(html); return; } catch {}
+    // fallback: bangun pakai DOMParser (aman saat innerHTML diblok)
+    try {
+      const doc = new DOMParser().parseFromString("<!doctype html><body>" + String(html) + "</body>", "text/html");
+      el.textContent = "";
+      while (doc.body.firstChild) el.appendChild(document.importNode(doc.body.firstChild, true));
+    } catch {}
+  };
+
   /* ================= storage (localStorage) ================= */
   const LS = {
     get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -37,18 +56,20 @@
       root.querySelectorAll('script[type="math/tex"], script[type="math/asciimath"]').forEach((n) => n.replaceWith(document.createTextNode(n.textContent || "")));
     } catch {}
   };
+  const parseHTML = (html) => {
+    try { return new DOMParser().parseFromString("<!doctype html><body>" + String(html) + "</body>", "text/html").body; }
+    catch { const d = document.createElement("div"); d.textContent = String(html); return d; }
+  };
   const stripHtml = (html) => {
     if (!html) return "";
-    const d = document.createElement("div");
-    d.innerHTML = String(html);
+    const d = parseHTML(html);
     katexToText(d);
     d.querySelectorAll("script, style, blank").forEach((n) => n.remove());
     return (d.textContent || "").replace(/\s+/g, " ").trim();
   };
   const cleanHtml = (html) => {
     if (!html) return "";
-    const d = document.createElement("div");
-    d.innerHTML = String(html);
+    const d = parseHTML(html);
     try {
       d.querySelectorAll("katex").forEach((n) => { const c = document.createElement("code"); c.textContent = n.getAttribute("latex") || ""; n.replaceWith(c); });
       d.querySelectorAll('script[type="math/tex"], script[type="math/asciimath"]').forEach((n) => n.replaceWith(document.createTextNode(n.textContent || "")));
@@ -113,7 +134,7 @@
     if (document.getElementById("zulfa-frame")) { bindPanel(); return; }
     const wrap = document.createElement("div");
     wrap.id = "zulfa-frame";
-    wrap.innerHTML = `
+    setHTML(wrap, `
       <div id="zulfa-header">
         <span id="zulfa-title">zulfa-googleform <small id="zulfa-sub"></small></span>
         <span style="display:flex;gap:6px">
@@ -151,7 +172,7 @@
         <div id="zulfa-results"></div>
         <div id="zulfa-debug"></div>
       </div>
-      <div id="zulfa-resize" title="Tarik untuk ubah ukuran"></div>`;
+      <div id="zulfa-resize" title="Tarik untuk ubah ukuran"></div>`);
     document.documentElement.appendChild(wrap);
     const fab = document.createElement("button");
     fab.id = "zulfa-fab";
@@ -325,15 +346,15 @@
       const a = [...(it.answers || []).map((x) => stripHtml(x.text)), ...(it.options || [])].join(" ").toLowerCase();
       return q.includes(f) || a.includes(f);
     });
-    if (!list.length) { els.results.innerHTML = `<div class="zulfa-empty">${state.items.length ? "Tidak cocok." : "Belum ada soal. Buka Google Form."}</div>`; return; }
-    els.results.innerHTML = list.map((it, i) => {
+    if (!list.length) { setHTML(els.results, `<div class="zulfa-empty">${state.items.length ? "Tidak cocok." : "Belum ada soal. Buka Google Form."}</div>`); return; }
+    setHTML(els.results, list.map((it, i) => {
       const qMedia = it.questionMedia ? `<br><img class="zulfa-qimg" src="${esc(it.questionMedia)}" loading="lazy" />` : "";
       const tag = it.ai ? "AI ✨" : esc(it.tag || it.type || "");
       const ans = it.pending && !it.answers.length ? `<div class="zulfa-ans zulfa-pending">⏳ menunggu AI…</div>`
         : it.answers.length ? it.answers.map((a) => { const img = a.mediaUrl ? `<br><img class="zulfa-aimg" src="${esc(a.mediaUrl)}" loading="lazy" />` : ""; return `<div class="zulfa-ans">${it.ai ? "✨ " : ""}${cleanHtml(a.text)}${img}</div>`; }).join("")
         : `<div class="zulfa-ans zulfa-none">—</div>`;
       return `<div class="zulfa-card"><div class="zulfa-qhead"><b>${i + 1}.</b> <span class="zulfa-tag">${tag}</span></div><div class="zulfa-q">${cleanHtml(it.question) || "<i>(soal gambar)</i>"}${qMedia}</div>${ans}</div>`;
-    }).join("");
+    }).join(""));
     els.results.querySelectorAll("img").forEach((img) => { img.referrerPolicy = "no-referrer"; });
   }
 
