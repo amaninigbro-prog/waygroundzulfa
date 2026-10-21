@@ -788,6 +788,10 @@
   }
   const modelScore = (n) => { const s = String(n); const m = s.match(/(\d+)\.(\d+)/); const pro = /pro/i.test(s) ? 1e9 : 0; const flashBoost = /flash/i.test(s) ? 5e8 : 0; const latest = /flash-latest/i.test(s) ? 1e5 : 0; const stable = /exp|preview|rc|lite/i.test(s) ? 0 : 1; return pro + flashBoost + latest + stable * 1e6 + (m ? +m[1] * 1e3 + +m[2] : 0); };
   const isThinking = (n) => { const s = String(n); return /pro|thinking/i.test(s) && !/image|tts|embedding|aqa|lite/i.test(s); };
+  /* Semua model bisa menerima thinkingConfig untuk MEMATIKAN thinking (budget 0).
+     Ini penting: flash "latest" kadang thinking default ON dan menghabiskan
+     jatah output → jawaban kosong. */
+  const canDisableThinking = (n) => !/image|tts|embedding|aqa/i.test(String(n));
   const isValidModel = (n) => { const s = String(n); return (MODEL_RE.test(s) || s === "gemini-flash-latest") && !KNOWN_BAD_MODEL.test(s); };
 
   function buildPrompt(questions) {
@@ -807,12 +811,19 @@
     return sys + "\n\nSOAL:\n" + list;
   }
   function parseGeminiJson(text) {
-    const clean = String(text || "").replace(/```json|```/g, "").trim();
-    const m = clean.match(/\[[\s\S]*\]/);
-    if (!m) throw new Error("Respon AI tidak bisa diparse.");
-    const arr = JSON.parse(m[0]);
-    if (!Array.isArray(arr)) throw new Error("Respon AI bukan array.");
-    return arr.filter((x) => x && typeof x === "object" && Number.isFinite(Number(x.index)) && x.answer != null && String(x.answer).trim() !== "");
+    const raw = String(text || "").replace(/```json|```/gi, "").trim();
+    const keep = (arr) => (Array.isArray(arr) ? arr : [arr]).filter((x) => x && typeof x === "object" && Number.isFinite(Number(x.index)) && x.answer != null && String(x.answer).trim() !== "");
+    // 1) Array JSON utuh.
+    const arrM = raw.match(/\[[\s\S]*\]/);
+    if (arrM) { try { const r = keep(JSON.parse(arrM[0])); if (r.length) return r; } catch {} }
+    // 2) Objek tunggal (mis. {"index":1,...}).
+    const objM = raw.match(/\{[\s\S]*\}/);
+    if (objM) { try { const r = keep(JSON.parse(objM[0])); if (r.length) return r; } catch {} }
+    // 3) Tiap objek terpisah (JSON lines / tanpa array).
+    const objs = [...raw.matchAll(/\{[^{}]*"index"[^{}]*\}/g)].map((m) => { try { return JSON.parse(m[0]); } catch { return null; } }).filter(Boolean);
+    const r3 = keep(objs);
+    if (r3.length) return r3;
+    throw new Error("Respon AI tidak berisi JSON jawaban yang valid.");
   }
   function pickOption(rawAnswer, options) {
     const a = stripHtml(String(rawAnswer ?? "")).trim();
@@ -825,33 +836,48 @@
     const loose = options.find((o) => { const no = normMatch(o); return no && (no.includes(na) || na.includes(no)); });
     return loose || a;
   }
+  function extractText(data) {
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    return parts.filter((p) => !p.thought).map((x) => x.text || "").join("").trim();
+  }
   async function tryModel(apiKey, model, prompt, thinking = false) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 45000);
-    /* Output jawaban selalu JSON pendek — 2048 token sudah lebih dari cukup.
-       Token budget kecil = model selesai lebih cepat (tak menunggu slot besar). */
-    const gen = { temperature: 0, maxOutputTokens: 2048 };
-    if (thinking) gen.thinkingConfig = { thinkingBudget: 1024 };
+    /* Budget output cukup besar (JSON singkat, tapi flash thinking bisa makan
+       jatah). Kalau memungkinkan, MATIKAN thinking (budget 0) supaya cepat &
+       tidak balik kosong. Model pro tetap diberi thinking budget wajar. */
+    const withDisable = { temperature: 0, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } };
+    const withThinking = thinking ? { temperature: 0, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 2048 } } : withDisable;
+    const bare = { temperature: 0, maxOutputTokens: 8192 };
     const doFetch = (cfg) => fetch(`${BASE}/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
       method: "POST", signal: ctl.signal, headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: cfg }),
     });
     try {
-      let res = await doFetch(gen);
-      if (res.status === 400 && gen.thinkingConfig) {
-        try {
-          const t = await res.text();
-          if (/thinking/i.test(t)) {
-            const bare = { temperature: 0, maxOutputTokens: 2048 };
-            res = await doFetch(bare);
+      // Urutan konfigurasi yang dicoba; fallback biar tetap jalan di semua model.
+      const configs = canDisableThinking(model) ? [withThinking] : [];
+      configs.push(bare);
+      let lastStatus = 0, lastBody = "", sawEmpty = false;
+      for (const cfg of configs) {
+        const res = await doFetch(cfg);
+        if (!res.ok) {
+          lastStatus = res.status; lastBody = await res.text().catch(() => "");
+          // Error yang tak akan hilang walau ganti model → langsung lempar.
+          if (/API_KEY_INVALID|API key not valid|PERMISSION_DENIED|API_KEY_|RESOURCE_EXHAUSTED|quota/i.test(lastBody)) {
+            throw new Error(`Gemini [${model}] HTTP ${res.status} ${lastBody.slice(0, 200)}`);
           }
-        } catch {}
+          continue;
+        }
+        const data = await res.json();
+        const text = extractText(data);
+        if (text) return { text, model };
+        sawEmpty = true; // 200 tapi kosong → coba config berikutnya
+        const fr = data?.candidates?.[0]?.finishReason || "";
+        if (fr === "SAFETY" || fr === "RECITATION") throw new Error(`Gemini [${model}] diblokir (${fr})`);
       }
-      if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(`Gemini [${model}] HTTP ${res.status} ${t.slice(0, 200)}`); }
-      const data = await res.json();
-      const text = data?.candidates?.[0]?.content?.parts?.map((x) => x.text || "").join("") || "";
-      if (!text) throw new Error(`Gemini [${model}] respon kosong.`);
-      return { text, model };
+      if (lastStatus && !sawEmpty) throw new Error(`Gemini [${model}] HTTP ${lastStatus} ${lastBody.slice(0, 200)}`);
+      if (sawEmpty) throw new Error(`Gemini [${model}] respon kosong (cek kuota/API key).`);
+      throw new Error(`Gemini [${model}] gagal tanpa keterangan.`);
     } catch (e) { if (e?.name === "AbortError") throw new Error(`Gemini [${model}] timeout 45 dtk`); throw e; }
     finally { clearTimeout(timer); }
   }
@@ -869,9 +895,11 @@
       const budget = thinking ? 1024 : 0;
       try { const out = await tryModel(apiKey, model, prompt, thinking); if (LS.get("zulfa_model") !== model) LS.set("zulfa_model", model); return { ...out, thinking, budget }; }
       catch (e) {
-        if (/HTTP (401|403|429)/.test(e.message)) { LS.set("zulfa_model", ""); throw e; } // error auth/rate → menyerah cepat
-        if (/HTTP (400|404)/.test(e.message)) { badModels.add(model); if (LS.get("zulfa_model") === model) LS.set("zulfa_model", ""); } // model tak valid → jangan diulang paralel
-        return null; // 404/400/timeout model ini → coba berikutnya
+        const msg = e.message || "";
+        // Error auth / API key / rate / kuota → menyerah cepat, tampilkan ke user.
+        if (/HTTP (401|403|429)/.test(msg) || /API_KEY_INVALID|API key not valid|PERMISSION_DENIED|API_KEY_|RESOURCE_EXHAUSTED|quota/i.test(msg)) { LS.set("zulfa_model", ""); throw e; }
+        if (/HTTP 404/.test(msg)) { badModels.add(model); if (LS.get("zulfa_model") === model) LS.set("zulfa_model", ""); } // model tak ada → jangan diulang paralel
+        return null; // 400/404/timeout model ini → coba berikutnya
       }
     };
     /* 1) Model tersimpan (kemungkinan besar sudah terbukti jalan). */
@@ -925,6 +953,7 @@
     onPartial = typeof onPartial === "function" ? onPartial : null;
     const chunks = [];
     for (let s = 0; s < qs.length; s += SIZE) chunks.push({ s, chunk: qs.slice(s, s + SIZE) });
+    let lastErr = null;
     for (let i = 0; i < chunks.length; i += CONC) {
       const wave = chunks.slice(i, i + CONC).map(({ s, chunk }) =>
         askBatch(call, apiKey, chunk)
@@ -937,11 +966,13 @@
             }
             return { s, m };
           })
-          .catch(() => ({ s, m: new Map() })));
+          .catch((e) => { lastErr = e; return { s, m: new Map(), err: e }; }));
       for (const { s, m } of await Promise.all(wave)) {
         m.forEach((ans, local) => { const idx = local + s; if (qs[idx]) out.push({ index: idx + 1, answer: pickOption(ans, qs[idx].options) }); });
       }
     }
+    // Kalau TIDAK ada satu pun jawaban, lempar error asli biar user tahu sebabnya.
+    if (!out.length && lastErr) throw lastErr;
     return out;
   }
 
@@ -1097,10 +1128,9 @@
         try {
           answers = await solveWithAI(apiKey, cleaned, applyPartial);
         } catch (e) {
-          if (/HTTP (400|401|403|429)/.test(e.message || "")) throw e;
           need.forEach((it) => { if (!it.answers?.length) it.pending = true; });
           render();
-          throw e;
+          throw e; // teruskan error ASLI (HTTP/key/kosong) ke status user
         }
         const map = new Map(answers.map((a) => [Number(a.index), String(a.answer ?? "")]));
         need.forEach((it, i) => {
@@ -1111,7 +1141,7 @@
         render();
         if (state.highlight) highlightSoon(4000);
         const failed = need.filter((it) => !it.answers?.length).length;
-        if (failed > 0 && failed === need.length) throw new Error("Semua soal gagal diselesaikan");
+        if (failed > 0 && failed === need.length) throw new Error("AI tak memberi jawaban (balasan kosong/tak dikenali). Coba lagi atau ganti API key.");
         if (failed > 0) {
           render(); highlightInPage();
           setStatus(`${state.items.length - failed}/${state.items.length} selesai ✨ • ${failed} gagal — coba lagi`, "warn");
