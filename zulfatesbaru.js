@@ -1,18 +1,38 @@
-/* zulfawayground — bookmarklet study assistant (Wayground / Quizizz / Kahoot)
- * Gabungan penuh: hook trafik (main world) + panel UI + Gemini solve.
- * Jalan di konteks halaman saat bookmark diklik. Tanpa extension, tanpa bot join.
+/* zulfawayground — bookmarklet study assistant (MULTI-MODE, 1 file)
+ *  - Mode Google Forms : auto-isi semua soal (PG, checkbox, dropdown, isian,
+ *    paragraf, grid, tanggal/jam) via AI. SUBMIT TETAP MANUAL.
+ *  - Mode Game (Wayground / Quizizz / Kahoot): hook trafik + panel + Gemini solve.
+ *  Halaman terdeteksi otomatis saat bookmark diklik.
  *
  * Pakai:
  *   1) Buat bookmark baru. Nama: zulfawayground
- *   2) URL: tempel hasil dari build.js (isi javascript:...) atau
- *      tempel isi file ini dgn prefix "javascript:" lalu minify manual.
- *   3) Buka tab game, join seperti biasa, klik bookmark.
+ *   2) URL: tempel hasil build (javascript:...) dari file ini.
+ *   3) Buka Google Forms / game, klik bookmark.
  */
 (() => {
   "use strict";
+
+  /* ================= ROUTER: deteksi halaman ================= */
+  const host = (location.hostname || "").toLowerCase();
+  const path = (location.pathname || "").toLowerCase();
+  const isGoogleForms =
+    (/(^|\.)docs\.google\.com$/.test(host) && /\/forms\//.test(path)) ||
+    /(^|\.)forms\.gle$/.test(host) ||
+    /(^|\.)forms\.google\.com$/.test(host);
+
+  if (isGoogleForms) {
+    if (window.__zlfFormLoaded) { window.__zlfFormShow && window.__zlfFormShow(); return; }
+    window.__zlfFormLoaded = true;
+    runGoogleForms();
+    return;
+  }
+
+  /* ================= MODE GAME (Wayground / Quizizz / Kahoot) ================= */
   if (window.__zulfaLoaded) { window.__zulfaShow && window.__zulfaShow(); return; }
   window.__zulfaLoaded = true;
+  runWayground();
 
+  function runWayground() {
   /* ================= storage (localStorage) ================= */
   const LS = {
     get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -609,9 +629,13 @@
     scrapeVisible();
   }, 1000);
   setInterval(() => { if (state.autoAnswer) autoAnswer(); }, 800);
+  /* Cooldown global saat kena 429 (kuota) — supaya tidak menembak terus. */
+  let quotaCooldownUntil = 0;
+  const inQuotaCooldown = () => Date.now() < quotaCooldownUntil;
   let autoSolveTried = new Set();
   setInterval(() => {
     if (state.solving || !state.items.length) return;
+    if (inQuotaCooldown()) return;
     const key = activeKey();
     if (!key) return;
     const pend = state.items.filter((x) => !x.answers?.length);
@@ -796,17 +820,39 @@
 
   function buildPrompt(questions) {
     const list = questions.map((q, i) => { const opts = q.options.length ? q.options.join(" | ") : "(isian — jawaban singkat)"; return `${i + 1}. ${q.question}\n   Opsi: ${opts}`; }).join("\n");
-    // Prompt padat: tetap teliti tapi singkat, supaya model flash menjawab lebih cepat.
+    // Prompt universal: berlaku untuk SEMUA jurusan & mata kuliah, teliti & anti-ngawur.
     const sys = [
-      "Kamu pengoreksi ujian yang teliti. Jawab 100% benar, jangan menebak acak.",
-      "Perhatikan kata kunci: BUKAN, kecuali, paling tepat, semua benar/salah, negasi, satuan, angka jebakan (beda koma/satuan). Hitung cek ulang dengan cara lain bila mungkin.",
-      "OUTPUT:",
-      "A. MCQ: salin PERSIS teks opsi terpilih (tanpa 'A.'/penjelasan). >1 benar: gabung dipisah ' || '.",
-      "C. True/False: persis \"True\" atau \"False\".",
-      "D. Isian tanpa opsi: jawaban paling tepat & singkat; hitungan = angka saja (satuan bila diminta).",
-      "E. wajib pilih dari opsi yang ada — jangan mengarang.",
-      'F. FORMAT: balas HANYA JSON valid [{"index":<no>,"answer":"<teks>"}], urut, semua soal terjawab. Tanpa markdown/penjelasan.',
-      'Contoh: {"index":1,"answer":"Paris"}',
+      "Kamu dosen senior & penguji berpengalaman 20 tahun yang menguasai SEMUA jurusan/bidang ilmu dan SEMUA mata kuliah:",
+      "Sains & teknik (matematika, fisika, kimia, biologi, informatika, teknik sipil/mesin/elektro, arsitektur),",
+      "Kesehatan (kedokteran, keperawatan, farmasi, gizi, kebidanan), ekonomi & bisnis (akuntansi, manajemen, ekonomi, pajak),",
+      "Sosial & humaniora (hukum, psikologi, sosiologi, sejarah, geografi, bahasa, sastra, filsafat, agama, PPKn),",
+      "Pendidikan, seni & desain, pertanian, perikanan, kehutanan, peternakan, pariwisata, olahraga, dan bidang lain.",
+      "Jawab setiap soal dari bidang mana pun dengan 100% benar dan berbasis fakta/konsep baku — JANGAN menebak ngawur, JANGAN mengarang.",
+      "",
+      "PRINSIP MENJAWAB:",
+      "1. Kenali bidang & konsep tiap soal lebih dulu, lalu terapkan rumus/teori/definisi/kaidah yang benar sesuai bidangnya.",
+      "2. Perhatikan kata kunci: BUKAN, kecuali, paling tepat, semua benar/salah, negasi, urutan, satuan, angka jebakan (beda koma/tanda/desimal/satuan), dan istilah asing.",
+      "3. Hitungan: kerjakan langkah demi langkah dan cek ulang dengan cara lain bila mungkin. Taati operasi (kali/bagi sebelum tambah/kurang), tanda negatif, dan satuan.",
+      "4. Kode/rumus/istilah (programming, matematika, kimia, hukum, medis, dsb.): gunakan istilah baku yang benar dan persis.",
+      "5. Bila soal ambigu, pilih jawaban yang PALING TEPAT menurut konsensus/teori baku bidang tersebut.",
+      "6. Jangan pernah menebak acak: bila benar-benar tidak bisa dipastikan, pilih opsi yang paling didukung sisa informasi/konsep yang valid.",
+      "",
+      "BAHASA (INDONESIA & INGGRIS, dan bahasa lain):",
+      "- Soal bisa berbahasa INDONESIA atau INGGRIS (atau bahasa lain). PAHAMI soal dalam bahasa apa pun dan jawab dengan benar.",
+      "- IKUTI BAHASA SOAL: bila soal berbahasa Inggris, jawaban juga dalam bahasa Inggris; bila Indonesia, jawab dalam Indonesia. Jangan menerjemahkan jawaban ke bahasa lain.",
+      "- Pilihan ganda: SELALU salin PERSIS teks opsi apa adanya (jangan terjemahkan, jangan ubah ejaan).",
+      "- Istilah teknis/ilmiah/nama diri (mis. 'mitochondria', 'supply chain', 'tort law', 'IPO', 'PCR') tetap dalam bentuk baku/Inggris bila memang begitu istilahnya.",
+      "- Soal bahasa Inggris (grammar, vocabulary, reading, tenses, part of speech): terapkan kaidah tata bahasa Inggris yang baku.",
+      "- Soal Benar/Salah berbahasa Inggris: jawab persis \"True\" atau \"False\" (Indonesia: \"Benar\"/\"Salah\" bila opsinya begitu).",
+      "",
+      "ATURAN OUTPUT:",
+      "A. Pilihan ganda (MCQ): salin PERSIS teks opsi terpilih (tanpa 'A.'/'1.'/penjelasan). Bila lebih dari satu benar, gabung dengan ' || '.",
+      "B. Benar/Salah: jawab persis \"True\" atau \"False\" (atau \"Benar\"/\"Salah\" sesuai opsi).",
+      "C. Isian tanpa opsi: beri jawaban paling tepat & singkat SESUAI BAHASA SOAL; untuk hitungan cukup angka saja (tambahkan satuan hanya bila diminta).",
+      "D. WAJIB memilih dari opsi yang tersedia — jangan mengarang opsi baru.",
+      "E. FORMAT: balas HANYA JSON valid [{\"index\":<no>,\"answer\":\"<teks>\"}], berurutan, SEMUA soal wajib terjawab. Tanpa markdown/penjelasan.",
+      "Contoh (Inggris): [{\"index\":1,\"answer\":\"Photosynthesis\"}]",
+      "Contoh (Indonesia): [{\"index\":1,\"answer\":\"Fotosintesis\"}]",
     ].join("\n");
     return sys + "\n\nSOAL:\n" + list;
   }
@@ -842,7 +888,7 @@
   }
   async function tryModel(apiKey, model, prompt, thinking = false) {
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 45000);
+    const timer = setTimeout(() => ctl.abort(), 60000);
     /* Budget output cukup besar (JSON singkat, tapi flash thinking bisa makan
        jatah). Kalau memungkinkan, MATIKAN thinking (budget 0) supaya cepat &
        tidak balik kosong. Model pro tetap diberi thinking budget wajar. */
@@ -853,32 +899,41 @@
       method: "POST", signal: ctl.signal, headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: cfg }),
     });
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     try {
       // Urutan konfigurasi yang dicoba; fallback biar tetap jalan di semua model.
       const configs = canDisableThinking(model) ? [withThinking] : [];
       configs.push(bare);
       let lastStatus = 0, lastBody = "", sawEmpty = false;
       for (const cfg of configs) {
-        const res = await doFetch(cfg);
-        if (!res.ok) {
-          lastStatus = res.status; lastBody = await res.text().catch(() => "");
-          // Error yang tak akan hilang walau ganti model → langsung lempar.
-          if (/API_KEY_INVALID|API key not valid|PERMISSION_DENIED|API_KEY_|RESOURCE_EXHAUSTED|quota/i.test(lastBody)) {
-            throw new Error(`Gemini [${model}] HTTP ${res.status} ${lastBody.slice(0, 200)}`);
+        // Retry khusus 429 (quota/rate): sekali jeda singkat, lalu lempar (cooldown global menangani sisanya).
+        for (let rd = 0; rd < 2; rd++) {
+          const res = await doFetch(cfg);
+          if (res.status === 429) {
+            lastStatus = 429; lastBody = await res.text().catch(() => "");
+            if (rd < 1) { await sleep(2000); continue; } // jeda 2 dtk sekali
+            throw new Error(`Gemini [${model}] HTTP 429 kuota/limit habis — tunggu sebentar atau pakai API key/billing lain.`);
           }
-          continue;
+          if (!res.ok) {
+            lastStatus = res.status; lastBody = await res.text().catch(() => "");
+            if (/API_KEY_INVALID|API key not valid|PERMISSION_DENIED|API_KEY_|RESOURCE_EXHAUSTED|quota/i.test(lastBody)) {
+              throw new Error(`Gemini [${model}] HTTP ${res.status} ${lastBody.slice(0, 200)}`);
+            }
+            break; // error lain → coba config berikutnya
+          }
+          const data = await res.json();
+          const text = extractText(data);
+          if (text) return { text, model };
+          sawEmpty = true; // 200 tapi kosong → coba config berikutnya
+          const fr = data?.candidates?.[0]?.finishReason || "";
+          if (fr === "SAFETY" || fr === "RECITATION") throw new Error(`Gemini [${model}] diblokir (${fr})`);
+          break;
         }
-        const data = await res.json();
-        const text = extractText(data);
-        if (text) return { text, model };
-        sawEmpty = true; // 200 tapi kosong → coba config berikutnya
-        const fr = data?.candidates?.[0]?.finishReason || "";
-        if (fr === "SAFETY" || fr === "RECITATION") throw new Error(`Gemini [${model}] diblokir (${fr})`);
       }
       if (lastStatus && !sawEmpty) throw new Error(`Gemini [${model}] HTTP ${lastStatus} ${lastBody.slice(0, 200)}`);
       if (sawEmpty) throw new Error(`Gemini [${model}] respon kosong (cek kuota/API key).`);
       throw new Error(`Gemini [${model}] gagal tanpa keterangan.`);
-    } catch (e) { if (e?.name === "AbortError") throw new Error(`Gemini [${model}] timeout 45 dtk`); throw e; }
+    } catch (e) { if (e?.name === "AbortError") throw new Error(`Gemini [${model}] timeout 60 dtk`); throw e; }
     finally { clearTimeout(timer); }
   }
   /* Model yang baru gagal (in-memory) — dipakai agar panggilan paralel tidak
@@ -948,13 +1003,15 @@
     const call = getProvider() === "thirtystore" ? callThirtystore : callGemini;
     const qs = questions;
     const out = [];
-    const SIZE = 8;   // batch lebih kecil → tiap request selesai lebih cepat
-    const CONC = 8;   // paralel lebih banyak → total waktu turun
+    const SIZE = 10;  // batch lebih besar → total request lebih sedikit (hemat kuota)
+    const CONC = 3;   // paralel sedang → tidak langsung kena rate limit 429
     onPartial = typeof onPartial === "function" ? onPartial : null;
+    const isQuotaErr = (e) => /HTTP 429|quota|RESOURCE_EXHAUSTED|exceeded/i.test(e?.message || "");
     const chunks = [];
     for (let s = 0; s < qs.length; s += SIZE) chunks.push({ s, chunk: qs.slice(s, s + SIZE) });
-    let lastErr = null;
+    let lastErr = null, quotaHit = false;
     for (let i = 0; i < chunks.length; i += CONC) {
+      if (quotaHit) break; // kuota sudah habis → berhenti, jangan hammer lagi
       const wave = chunks.slice(i, i + CONC).map(({ s, chunk }) =>
         askBatch(call, apiKey, chunk)
           .then((m) => {
@@ -966,7 +1023,7 @@
             }
             return { s, m };
           })
-          .catch((e) => { lastErr = e; return { s, m: new Map(), err: e }; }));
+          .catch((e) => { lastErr = e; if (isQuotaErr(e)) quotaHit = true; return { s, m: new Map(), err: e }; }));
       for (const { s, m } of await Promise.all(wave)) {
         m.forEach((ans, local) => { const idx = local + s; if (qs[idx]) out.push({ index: idx + 1, answer: pickOption(ans, qs[idx].options) }); });
       }
@@ -1076,6 +1133,7 @@
     requestSolve.retries = requestSolve.retries || 0;
     const key = activeKey();
     if (!key) { setStatus(`${state.items.length} soal ketangkep • isi API key di panel ✨`, "warn"); return; }
+    if (inQuotaCooldown()) { setStatus("Kuota Gemini sedang cooldown (429) — tunggu ±1 menit.", "warn"); return; }
     ensureSolved(key, source).then((r) => {
       if (!r?.ok && /Masih menyelesaikan/.test(r?.error || "")) {
         if (requestSolve.retries < 3) { requestSolve.retries++; setTimeout(() => requestSolve(source), 4000); }
@@ -1153,7 +1211,16 @@
       return { ok: true, count: state.items.length, cached: false };
       } while (solveDirty);
       return { ok: true, count: state.items.length, cached: true };
-    } catch (e) { setStatus(`AI gagal: ${e.message}`, "err"); return { ok: false, error: e.message }; }
+    } catch (e) {
+      const msg = e?.message || "unknown";
+      if (/HTTP 429|quota|RESOURCE_EXHAUSTED|exceeded/i.test(msg)) {
+        quotaCooldownUntil = Date.now() + 60000; // jeda 60 dtk sebelum auto-coba lagi
+        setStatus(`Kuota Gemini habis (429). Tunggu ±1 menit lalu coba lagi, atau pakai API key/billing lain.`, "err");
+      } else {
+        setStatus(`AI gagal: ${msg}`, "err");
+      }
+      return { ok: false, error: msg };
+    }
     finally { state.solving = false; }
   }
 
@@ -1163,7 +1230,526 @@
     buildUI();
     installHook();
     if (!activeKey()) setStatus("Pilih provider & isi API key di panel atas (sekali saja, tersimpan lokal).", "warn");
-    console.log("%c[zulfawayground] ready", "color:#6b7280;font-weight:bold");
+    console.log("%c[zulfawayground] ready (game mode)", "color:#6b7280;font-weight:bold");
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
+  } // ===== end runWayground =====
+
+  /* ================================================================
+   * MODE GOOGLE FORMS — auto-isi semua soal via AI, submit manual.
+   * ================================================================ */
+  function runGoogleForms() {
+    /* ---------- storage ---------- */
+    const LS = {
+      get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+      set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+    };
+    const getKey = () => LS.get("zlf_geminiKey") || "";
+    const setKey = (v) => LS.set("zlf_geminiKey", v);
+    const getProvider = () => LS.get("zlf_provider") || "gemini";
+    const setProvider = (v) => LS.set("zlf_provider", v);
+    const getTsKey = () => LS.get("zlf_ts_key") || "";
+    const getTsBase = () => (LS.get("zlf_ts_base") || "https://api.thirtystore.com/v1").replace(/\/+$/, "");
+    const getTsModel = () => LS.get("zlf_ts_model") || "deepseek-v4.1-flash";
+    const activeKey = () => (getProvider() === "thirtystore" ? getTsKey() : getKey());
+    const getLanguageMode = () => LS.get("zlf_lang") || "auto";
+    const setLanguageMode = (v) => LS.set("zlf_lang", v);
+
+    /* ---------- helpers ---------- */
+    const state = { questions: [], solving: false, userHidden: false, lastResult: "" };
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const norm = (s) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    /* ---------- Google Forms reader ---------- */
+    const Q_BLOCK_SEL = [
+      'div[role="listitem"]',
+      "div.freebirdFormviewerViewItemsItemItem",
+      "div.freebirdFormviewerViewItemsItemItemGroup",
+      "div.Qr7Oae",
+      "div.geS5n",
+    ].join(",");
+
+    const isVisible = (el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    function uniqueNodes(nodes) { const seen = new Set(); const out = []; for (const n of nodes) { if (n && !seen.has(n)) { seen.add(n); out.push(n); } } return out; }
+
+    function collectBlocks() {
+      let base = [...document.querySelectorAll('div[role="listitem"]')].filter(isVisible);
+      if (!base.length) base = uniqueNodes([...document.querySelectorAll(Q_BLOCK_SEL)]).filter(isVisible);
+      base = base.filter((b) => b.querySelector('input,textarea,[role="radio"],[role="checkbox"],[role="listbox"],select'));
+      base = base.filter((b) => !base.some((other) => other !== b && b.contains(other)));
+      base.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+      return base;
+    }
+
+    function itemTitle(block) {
+      const cands = ['[role="heading"]', ".freebirdFormviewerViewItemsItemItemTitle", ".M7eMe", ".HoXoMd .M7eMe", ".zS66Td"];
+      for (const sel of cands) { const el = block.querySelector(sel); const t = (el?.innerText || "").trim(); if (t) return t.replace(/\s*\*\s*$/, "").trim(); }
+      const clone = block.cloneNode(true);
+      clone.querySelectorAll('input,textarea,select,[role="radio"],[role="checkbox"],[role="listbox"],[role="option"]').forEach((n) => n.remove());
+      const lines = (clone.innerText || "").split("\n").map((s) => s.trim()).filter(Boolean);
+      return lines[0] ? lines[0].replace(/\s*\*\s*$/, "").trim() : "";
+    }
+
+    function detectType(block) {
+      if (block.querySelector("select") || block.querySelector('[role="listbox"]')) return "dropdown";
+      if (block.querySelector("textarea")) return "paragraph";
+      const radios = block.querySelectorAll('[role="radio"],input[type="radio"]');
+      const checks = block.querySelectorAll('[role="checkbox"],input[type="checkbox"]');
+      const groups = block.querySelectorAll('[role="radiogroup"]');
+      if ((radios.length && groups.length > 1) || (radios.length && block.querySelector('[role="row"],[role="grid"]'))) return "radio_grid";
+      if (checks.length) return "checkbox";
+      if (radios.length) return "radio";
+      if (block.querySelector('input:not([type="hidden"])')) return "text";
+      return "unknown";
+    }
+
+    function optionElements(block) {
+      let opts = [...block.querySelectorAll('[role="radio"],[role="checkbox"]')];
+      if (!opts.length) opts = [...block.querySelectorAll('input[type="radio"],input[type="checkbox"]')].map((i) => i.closest("label") || i);
+      return uniqueNodes(opts).filter(isVisible);
+    }
+
+    function optLabel(optEl) {
+      let t = "";
+      const lbl = optEl.getAttribute && optEl.getAttribute("aria-label");
+      if (lbl) t = lbl;
+      if (!t) t = optEl.innerText || "";
+      if (!t) { const lab = optEl.closest("label"); t = lab?.innerText || optEl.textContent || ""; }
+      return String(t).replace(/\s+/g, " ").trim();
+    }
+
+    function readForm() {
+      const blocks = collectBlocks();
+      const result = [];
+      blocks.forEach((block, idx) => {
+        const title = itemTitle(block);
+        if (!title) return;
+        const type = detectType(block);
+        const item = { id: idx, block, title, type, options: [], rows: [], required: false, kind: "" };
+        if (/[*]\s*$/.test(title) || block.querySelector("[required],[aria-required='true'],[aria-label*='Wajib'],[aria-label*='required' i]")) item.required = true;
+        if (type === "radio" || type === "checkbox") { item.options = optionElements(block).map(optLabel).filter(Boolean); item.kind = type; }
+        else if (type === "radio_grid") {
+          item.kind = "radio_grid";
+          item.rows = [...block.querySelectorAll('[role="radiogroup"]')].map((g) => {
+            let lbl = g.getAttribute("aria-label") || "";
+            if (!lbl) { const row = g.closest('[role="row"]') || g.parentElement; lbl = (row?.innerText || "").split("\n")[0].trim(); }
+            return lbl.trim();
+          }).filter(Boolean);
+          if (!item.rows.length) item.rows = ["(baris)"];
+        } else if (type === "dropdown") {
+          if (block.querySelector("select")) item.options = [...block.querySelector("select").options].map((o) => (o.textContent || "").trim()).filter(Boolean);
+          item.kind = "dropdown";
+        } else item.kind = type;
+        result.push(item);
+      });
+      return result;
+    }
+
+    /* ---------- AI provider ---------- */
+    const FLASH_MODELS = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash"];
+    const BASE = "https://generativelanguage.googleapis.com";
+    function extractText(data) { const parts = data?.candidates?.[0]?.content?.parts || []; return parts.filter((p) => !p.thought).map((x) => x.text || "").join("").trim(); }
+
+    async function tryGemini(apiKey, model, prompt) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 60000);
+      try {
+        const res = await fetch(`${BASE}/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+          method: "POST", signal: ctl.signal, headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 } } }),
+        });
+        if (res.status === 429) throw new Error(`Gemini [${model}] HTTP 429 kuota/limit habis — tunggu atau ganti key.`);
+        if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(`Gemini [${model}] HTTP ${res.status} ${t.slice(0, 200)}`); }
+        const data = await res.json();
+        const text = extractText(data);
+        if (!text) throw new Error(`Gemini [${model}] respon kosong.`);
+        return { text, model };
+      } catch (e) { if (e?.name === "AbortError") throw new Error(`Gemini [${model}] timeout 60 dtk`); throw e; }
+      finally { clearTimeout(timer); }
+    }
+
+    async function callGemini(apiKey, prompt) {
+      let lastErr = null;
+      for (const model of FLASH_MODELS) {
+        try { return await tryGemini(apiKey, model, prompt); }
+        catch (e) { lastErr = e; if (/HTTP (401|403|429)/.test(e.message) || /API_KEY_INVALID|PERMISSION_DENIED/i.test(e.message)) throw e; }
+      }
+      throw lastErr || new Error("Semua model Gemini gagal dihubungi.");
+    }
+
+    async function callThirtystore(apiKey, prompt) {
+      const base = getTsBase(); const model = getTsModel();
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 45000);
+      try {
+        const res = await fetch(`${base}/chat/completions`, {
+          method: "POST", signal: ctl.signal,
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 2048, stream: false }),
+        });
+        if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error(`ThirtyStore [${model}] HTTP ${res.status} ${t.slice(0, 200)}`); }
+        const data = await res.json();
+        const text = data?.choices?.[0]?.message?.content || "";
+        if (!text) throw new Error(`ThirtyStore [${model}] respon kosong.`);
+        return { text, model };
+      } catch (e) { if (e?.name === "AbortError") throw new Error(`ThirtyStore [${model}] timeout 45 dtk`); throw e; }
+      finally { clearTimeout(timer); }
+    }
+
+    /* ---------- prompt ---------- */
+    function buildPrompt(questions) {
+      const langMode = getLanguageMode();
+      const langNote = langMode === "en" ? "SELALU jawab dalam bahasa INGGRIS." : langMode === "id" ? "SELALU jawab dalam bahasa INDONESIA." : "IKUTI bahasa tiap soal (Indonesia→Indonesia, Inggris→Inggris).";
+      const list = questions.map((q, i) => {
+        const opts = (q.options && q.options.length) ? q.options.join(" | ") : "(isian — jawaban singkat)";
+        const tipe = q.kind || q.type || "text";
+        return `${i + 1}. [${tipe}] ${q.title}\n   Opsi: ${opts}`;
+      }).join("\n");
+      const sys = [
+        "Kamu dosen senior & penguji berpengalaman 20 tahun yang menguasai SEMUA jurusan/bidang ilmu dan SEMUA mata kuliah:",
+        "sains & teknik, kesehatan, ekonomi & bisnis, sosial & humaniora, pendidikan, seni, pertanian, pariwisata, olahraga, dll.",
+        "Jawab setiap soal dengan 100% benar dan berbasis fakta/konsep baku — JANGAN menebak ngawur, JANGAN mengarang.",
+        "Perhatikan kata kunci: BUKAN, kecuali, paling tepat, negasi, satuan, angka jebakan. Untuk hitungan, kerjakan langkah demi langkah dan cek ulang.",
+        "",
+        "PETUNJUK PER TIPE:",
+        "- radio (pilihan ganda 1 jawaban): pilih TEPAT SATU opsi.",
+        "- checkbox (pilihan ganda banyak): pilih SEMUA opsi yang benar, pisahkan dengan ' || '.",
+        "- dropdown: pilih TEPAT SATU opsi dari daftar.",
+        "- text (isian singkat): jawaban paling tepat & singkat; untuk angka cukup angka saja (satuan hanya bila diminta).",
+        "- paragraph (uraian): beri jawaban ringkas, padat, benar (maks ~3 kalimat), sesuai bahasa soal.",
+        "- radio_grid (tabel pilihan): jawab per baris, format: <baris> = <pilihan> dipisah ' || '.",
+        "",
+        "BAHASA (INDONESIA & INGGRIS, dan bahasa lain):",
+        "- " + langNote,
+        "- Pilihan ganda: SELALU salin PERSIS teks opsi apa adanya (jangan diterjemahkan/diubah). Istilah teknis tetap bentuk baku.",
+        "",
+        "FORMAT OUTPUT:",
+        "Balas HANYA JSON valid [{\"index\":<no>,\"answer\":\"<teks>\"}], berurutan, SEMUA soal wajib terjawab. Tanpa markdown/penjelasan.",
+        "Contoh: [{\"index\":1,\"answer\":\"Opsi yang benar\"}]",
+      ].join("\n");
+      return sys + "\n\nSOAL:\n" + list;
+    }
+
+    function parseJson(text) {
+      const raw = String(text || "").replace(/```json|```/gi, "").trim();
+      const keep = (arr) => (Array.isArray(arr) ? arr : [arr]).filter((x) => x && typeof x === "object" && Number.isFinite(Number(x.index)) && x.answer != null && String(x.answer).trim() !== "");
+      const arrM = raw.match(/\[[\s\S]*\]/);
+      if (arrM) { try { const r = keep(JSON.parse(arrM[0])); if (r.length) return r; } catch {} }
+      const objM = raw.match(/\{[\s\S]*\}/);
+      if (objM) { try { const r = keep(JSON.parse(objM[0])); if (r.length) return r; } catch {} }
+      const objs = [...raw.matchAll(/\{[^{}]*"index"[^{}]*\}/g)].map((m) => { try { return JSON.parse(m[0]); } catch { return null; } }).filter(Boolean);
+      const r3 = keep(objs);
+      if (r3.length) return r3;
+      throw new Error("Respon AI tidak berisi JSON jawaban yang valid.");
+    }
+
+    /* ---------- MATCH & FILL ---------- */
+    function matchOption(answer, options) {
+      if (!options || !options.length) return null;
+      const a = norm(answer); if (!a) return null;
+      let hit = options.find((o) => norm(o) === a);
+      if (hit) return hit;
+      const cands = options.filter((o) => { const no = norm(o); return no && (a.includes(no) || no.includes(a)); });
+      if (cands.length) return cands.sort((x, y) => norm(y).length - norm(x).length)[0];
+      return null;
+    }
+
+    function setNativeValue(el, value) {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+
+    function clickEl(el) {
+      if (!el) return;
+      const target = el.closest('[role="radio"],[role="checkbox"],label') || el;
+      if (target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "BUTTON" || target.tagName === "LABEL")) { try { target.click(); return; } catch {} }
+      try {
+        target.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      } catch {}
+    }
+
+    function fillRadio(block, answer) {
+      const opts = optionElements(block); const labels = opts.map(optLabel);
+      const match = matchOption(answer, labels);
+      if (match) { clickEl(opts[labels.indexOf(match)]); return true; }
+      return false;
+    }
+
+    function fillCheckbox(block, answer) {
+      const parts = String(answer).split("||").map((s) => s.trim()).filter(Boolean);
+      const opts = optionElements(block); const labels = opts.map(optLabel);
+      const targets = new Set();
+      for (const p of parts) { const match = matchOption(p, labels); if (match) targets.add(labels.indexOf(match)); }
+      targets.forEach((i) => clickEl(opts[i]));
+      return targets.size > 0;
+    }
+
+    function fillDropdown(block, answer) {
+      const sel = block.querySelector("select");
+      if (sel) {
+        const texts = [...sel.options].map((o) => o.textContent || "");
+        const match = matchOption(answer, texts);
+        const opt = match != null ? sel.options[texts.indexOf(match)] : null;
+        if (opt) {
+          const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+          if (setter) setter.call(sel, opt.value); else sel.value = opt.value;
+          sel.dispatchEvent(new Event("input", { bubbles: true })); sel.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        }
+        return false;
+      }
+      const listbox = block.querySelector('[role="listbox"]');
+      if (listbox) {
+        clickEl(listbox);
+        const options = [...document.querySelectorAll('[role="option"]')].filter(isVisible);
+        const optLabels = options.map((o) => (o.innerText || "").trim());
+        const m = matchOption(answer, optLabels);
+        if (m) { clickEl(options[optLabels.indexOf(m)]); return true; }
+      }
+      return false;
+    }
+
+    function fillGrid(block, answer) {
+      const pairs = String(answer).split("||").map((s) => s.trim()).filter(Boolean);
+      const groups = [...block.querySelectorAll('[role="radiogroup"]')];
+      if (!groups.length) return false;
+      let any = false;
+      for (const pair of pairs) {
+        const m = pair.split("=").map((s) => s.trim());
+        const rowAns = m.length >= 2 ? { row: m[0], choice: m.slice(1).join("=") } : { row: "", choice: pair };
+        let gi = -1;
+        if (rowAns.row) gi = groups.findIndex((g) => { const lbl = g.getAttribute("aria-label") || (g.closest('[role="row"]')?.innerText || ""); return norm(lbl).includes(norm(rowAns.row)) || norm(rowAns.row).includes(norm(lbl).split(" ")[0]); });
+        if (gi < 0 && pairs.length === groups.length) gi = pairs.indexOf(pair);
+        if (gi < 0) continue;
+        const radios = [...groups[gi].querySelectorAll('[role="radio"]')].filter(isVisible);
+        const labels = radios.map(optLabel);
+        const match = matchOption(rowAns.choice, labels);
+        if (match) { clickEl(radios[labels.indexOf(match)]); any = true; }
+      }
+      return any;
+    }
+
+    function fillText(block, answer, isParagraph) {
+      const input = isParagraph ? block.querySelector("textarea") : (block.querySelector('input[type="text"],input:not([type])') || block.querySelector("input"));
+      if (!input) return false;
+      const t = input.getAttribute("type");
+      let val = String(answer).trim();
+      if (t === "date") { const m = val.match(/(\d{4})-(\d{2})-(\d{2})/); if (m) val = m[0]; }
+      setNativeValue(input, val);
+      return true;
+    }
+
+    async function applyAnswers(questions, answersMap) {
+      let filled = 0, failed = 0;
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const ans = answersMap.get(i + 1);
+        if (ans == null) { failed++; continue; }
+        let ok = false;
+        try {
+          if (q.kind === "radio") ok = fillRadio(q.block, ans);
+          else if (q.kind === "checkbox") ok = fillCheckbox(q.block, ans);
+          else if (q.kind === "radio_grid") { ok = fillGrid(q.block, ans); await sleep(60); }
+          else if (q.kind === "dropdown") { ok = fillDropdown(q.block, ans); await sleep(80); }
+          else if (q.type === "paragraph") ok = fillText(q.block, ans, true);
+          else ok = fillText(q.block, ans, false);
+        } catch (e) { ok = false; }
+        if (ok) filled++; else failed++;
+        await sleep(40);
+      }
+      return { filled, failed };
+    }
+
+    /* ---------- panel UI ---------- */
+    const CSS = `
+    #zlf-frame{position:fixed!important;top:20px!important;right:20px!important;width:320px!important;max-width:calc(100vw - 40px)!important;max-height:80vh!important;background:rgba(16,18,22,.97)!important;border:1px solid #262b33!important;border-radius:10px!important;box-shadow:0 4px 16px rgba(0,0,0,.5)!important;z-index:2147483647!important;display:flex!important;flex-direction:column!important;overflow:hidden!important;font-family:Inter,system-ui,sans-serif!important;font-size:12px!important;color:#c3c9d4!important}
+    #zlf-header{display:flex!important;align-items:center!important;justify-content:space-between!important;background:#1c2027!important;color:#8b93a1!important;padding:6px 8px!important;cursor:move!important;user-select:none!important;flex-shrink:0!important;border-bottom:1px solid #262b33!important}
+    #zlf-title{font-weight:600!important;font-size:12px!important}
+    #zlf-header button{background:#2a2f38!important;border:none!important;color:#9ca3af!important;width:22px!important;height:22px!important;border-radius:6px!important;cursor:pointer!important;font-weight:700!important;font-size:12px!important;line-height:1!important}
+    #zlf-header button:hover{background:#353b47!important;color:#e5e7eb!important}
+    #zlf-body{display:flex!important;flex-direction:column!important;gap:7px!important;padding:8px!important;overflow-y:auto!important}
+    #zlf-status{padding:7px 9px!important;font-size:11px!important;background:#14161b!important;border:1px solid #20252d!important;border-radius:7px!important;color:#8b93a1!important;line-height:1.4!important}
+    #zlf-status[data-kind="ok"]{color:#6ee7a0!important}
+    #zlf-status[data-kind="warn"]{color:#d9a648!important}
+    #zlf-status[data-kind="err"]{color:#e06868!important}
+    .zlf-row{display:flex!important;gap:6px!important;align-items:center!important}
+    .zlf-label{flex:0 0 auto!important;color:#8b93a1!important;font-size:11px!important}
+    #zlf-frame select,#zlf-frame input{flex:1!important;min-width:0!important;box-sizing:border-box!important;padding:6px 8px!important;border:1px solid #2e3440!important;border-radius:7px!important;background:#1a1e24!important;color:#d1d5db!important;font-size:12px!important;outline:none!important}
+    #zlf-go{width:100%!important;padding:11px!important;border:none!important;border-radius:8px!important;background:#22c55e!important;color:#06210f!important;font-weight:800!important;font-size:14px!important;cursor:pointer!important;letter-spacing:.02em!important}
+    #zlf-go:hover{background:#34d977!important}
+    #zlf-go:disabled{background:#2a2f38!important;color:#6b7280!important;cursor:not-allowed!important}
+    #zlf-note{font-size:10px!important;color:#6b7280!important;text-align:center!important}
+    #zlf-fab{position:fixed!important;bottom:14px!important;left:14px!important;width:12px!important;height:12px!important;border-radius:50%!important;border:none!important;background:#9ca3af!important;opacity:.45!important;padding:0!important;font-size:0!important;cursor:pointer!important;z-index:2147483647!important}
+    #zlf-fab:hover{opacity:1!important;transform:scale(1.6)!important;background:#6b7280!important}
+    `;
+
+    let els = {};
+    function injectCSS() {
+      if (document.getElementById("zlf-style")) return;
+      const s = document.createElement("style"); s.id = "zlf-style"; s.textContent = CSS;
+      (document.head || document.documentElement).appendChild(s);
+    }
+
+    function buildUI() {
+      if (document.getElementById("zlf-frame")) { bindPanel(); return; }
+      const wrap = document.createElement("div");
+      wrap.id = "zlf-frame";
+      wrap.innerHTML = `
+        <div id="zlf-header">
+          <span id="zlf-title">zlfform <small style="opacity:.6;font-weight:400">Google Forms</small></span>
+          <span style="display:flex;gap:6px"><button type="button" id="zlf-min" title="Perkecil">—</button></span>
+        </div>
+        <div id="zlf-body">
+          <div id="zlf-status">Isi provider & API key, lalu klik "Auto Isi".</div>
+          <div class="zlf-row"><span class="zlf-label">Provider</span>
+            <select id="zlf-provider"><option value="gemini">Gemini</option><option value="thirtystore">ThirtyStore</option></select>
+          </div>
+          <div class="zlf-row"><input id="zlf-key" type="password" placeholder="API key…" /><button id="zlf-savekey" type="button" style="flex:0 0 auto;padding:6px 10px;border:1px solid #2e3440;border-radius:7px;background:#2a2f38;color:#c3c9d4;cursor:pointer">Simpan</button></div>
+          <div id="zlf-tsrow" style="display:none;flex-direction:column;gap:6px">
+            <input id="zlf-ts-base" type="text" placeholder="Base URL" />
+            <input id="zlf-ts-model" type="text" placeholder="Model" />
+          </div>
+          <div class="zlf-row"><span class="zlf-label">Bahasa</span>
+            <select id="zlf-lang"><option value="auto">Ikuti soal</option><option value="id">Indonesia</option><option value="en">Inggris</option></select>
+          </div>
+          <button id="zlf-go" type="button">Auto Isi</button>
+          <div id="zlf-note">Submit tetap MANUAL — cek dulu lalu klik Submit sendiri.</div>
+        </div>`;
+      document.documentElement.appendChild(wrap);
+      const fab = document.createElement("button");
+      fab.id = "zlf-fab"; fab.title = "zlfform (Alt+H)";
+      document.documentElement.appendChild(fab);
+      bindPanel();
+    }
+
+    function setStatus(text, kind = "") { if (!els.status) return; els.status.textContent = text; els.status.dataset.kind = kind; }
+
+    function bindPanel() {
+      els.frame = document.getElementById("zlf-frame");
+      els.status = document.getElementById("zlf-status");
+      els.key = document.getElementById("zlf-key");
+      els.provider = document.getElementById("zlf-provider");
+      els.tsrow = document.getElementById("zlf-tsrow");
+      els.tsBase = document.getElementById("zlf-ts-base");
+      els.tsModel = document.getElementById("zlf-ts-model");
+      els.lang = document.getElementById("zlf-lang");
+      els.go = document.getElementById("zlf-go");
+      els.fab = document.getElementById("zlf-fab");
+
+      if (els.key) els.key.value = getKey();
+      if (els.provider) els.provider.value = getProvider();
+      if (els.tsBase) els.tsBase.value = getTsBase();
+      if (els.tsModel) els.tsModel.value = getTsModel();
+      if (els.lang) els.lang.value = getLanguageMode();
+
+      const syncProvider = () => {
+        const ts = getProvider() === "thirtystore";
+        if (els.tsrow) els.tsrow.style.display = ts ? "flex" : "none";
+        if (els.key) els.key.placeholder = ts ? "ThirtyStore API key…" : "Gemini API key…";
+        if (els.key) els.key.value = ts ? getTsKey() : getKey();
+      };
+      syncProvider();
+      els.provider.onchange = () => { setProvider(els.provider.value); syncProvider(); };
+      els.lang.onchange = () => setLanguageMode(els.lang.value);
+
+      const saveKey = () => {
+        const k = (els.key?.value || "").trim();
+        if (!k) return setStatus("Isi API key dulu.", "err");
+        if (getProvider() === "thirtystore") {
+          LS.set("zlf_ts_key", k);
+          if (els.tsBase?.value.trim()) LS.set("zlf_ts_base", els.tsBase.value.trim());
+          if (els.tsModel?.value.trim()) LS.set("zlf_ts_model", els.tsModel.value.trim());
+        } else setKey(k);
+        setStatus("Key tersimpan ✅", "ok");
+      };
+      document.getElementById("zlf-savekey").onclick = saveKey;
+      els.key.oninput = () => { if (getProvider() === "thirtystore") LS.set("zlf_ts_key", els.key.value.trim()); else setKey(els.key.value.trim()); };
+
+      els.go.onclick = () => runAutoFill();
+      els.fab.onclick = () => showPanel();
+      document.getElementById("zlf-min").onclick = () => hidePanel();
+
+      const header = document.getElementById("zlf-header");
+      let sx = 0, sy = 0, ox = 0, oy = 0, drag = false;
+      const start = (cx, cy) => { drag = true; sx = cx; sy = cy; const r = els.frame.getBoundingClientRect(); ox = r.left; oy = r.top; };
+      header.addEventListener("pointerdown", (e) => { if (e.target.closest("button")) return; start(e.clientX, e.clientY); try { header.setPointerCapture(e.pointerId); } catch {} }, true);
+      window.addEventListener("pointermove", (e) => {
+        if (!drag) return;
+        const r = els.frame.getBoundingClientRect();
+        const nx = Math.min(window.innerWidth - r.width, Math.max(0, ox + e.clientX - sx));
+        const ny = Math.min(window.innerHeight - r.height, Math.max(0, oy + e.clientY - sy));
+        els.frame.style.setProperty("left", nx + "px", "important");
+        els.frame.style.setProperty("top", ny + "px", "important");
+        els.frame.style.setProperty("right", "auto", "important");
+      }, true);
+      window.addEventListener("pointerup", () => (drag = false), true);
+    }
+
+    function showPanel() { els.frame && els.frame.style.setProperty("display", "flex", "important"); els.fab && els.fab.style.setProperty("display", "none", "important"); state.userHidden = false; }
+    function hidePanel() { els.frame && els.frame.style.setProperty("display", "none", "important"); els.fab && els.fab.style.setProperty("display", "block", "important"); state.userHidden = true; }
+    window.__zlfFormShow = showPanel;
+
+    window.addEventListener("keydown", (e) => {
+      try {
+        const hot = (e.altKey && (e.key === "h" || e.key === "H")) || (e.ctrlKey && e.shiftKey && (e.key === "h" || e.key === "H"));
+        if (!hot) return;
+        const t = e.target;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA") && !t.closest("#zlf-frame")) return;
+        e.preventDefault();
+        if (!els.frame || els.frame.style.getPropertyValue("display") === "none") showPanel(); else hidePanel();
+      } catch {}
+    });
+
+    /* ---------- AUTO FILL (1 tombol) ---------- */
+    async function runAutoFill() {
+      if (state.solving) return;
+      const key = activeKey();
+      if (!key) { setStatus("Isi API key dulu (klik Simpan).", "err"); return; }
+      state.solving = true;
+      els.go.disabled = true;
+      try {
+        const questions = readForm();
+        if (!questions.length) { setStatus("Tidak ada soal terdeteksi. Pastikan halaman Google Form terbuka.", "warn"); return; }
+        state.questions = questions;
+        setStatus(`Ditemukan ${questions.length} soal • AI menjawab…`, "");
+        const answersMap = new Map();
+        const SIZE = 10;
+        for (let s = 0; s < questions.length; s += SIZE) {
+          const chunk = questions.slice(s, s + SIZE);
+          const prompt = buildPrompt(chunk);
+          const call = getProvider() === "thirtystore" ? callThirtystore : callGemini;
+          const { text } = await call(key, prompt);
+          const arr = parseJson(text);
+          arr.forEach((a) => { const i = Number(a.index); if (Number.isFinite(i)) answersMap.set(i + s, String(a.answer ?? "")); });
+          setStatus(`Menjawab ${Math.min(s + SIZE, questions.length)}/${questions.length}…`, "");
+        }
+        const { filled, failed } = await applyAnswers(questions, answersMap);
+        state.lastResult = `Terisi ${filled}/${questions.length}` + (failed ? ` • ${failed} gagal` : "");
+        if (filled) setStatus(`✅ ${state.lastResult}. Cek lalu klik Submit SENDIRI (submit manual).`, failed ? "warn" : "ok");
+        else setStatus("⚠️ 0 terisi. Coba ganti provider/key atau isi manual.", "err");
+      } catch (e) {
+        setStatus(`AI gagal: ${e?.message || e}`, "err");
+      } finally {
+        state.solving = false;
+        if (els.go) els.go.disabled = false;
+      }
+    }
+
+    /* ---------- init ---------- */
+    function bootForm() {
+      injectCSS();
+      buildUI();
+      if (!activeKey()) setStatus("Pilih provider & isi API key (sekali saja, tersimpan lokal).", "warn");
+      console.log("%c[zulfawayground] ready (Google Forms mode)", "color:#6b7280;font-weight:bold");
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootForm); else bootForm();
+  } // ===== end runGoogleForms =====
 })();
