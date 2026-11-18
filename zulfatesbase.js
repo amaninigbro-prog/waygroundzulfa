@@ -68,7 +68,13 @@
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const hashStr = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h.toString(36); };
-  const normQ = (t) => stripHtml(t).toLowerCase().replace(/\s+/g, " ").slice(0, 140);
+  const SUB_DIGIT = { "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4", "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9", "₊": "+", "₋": "-", "₌": "=", "₍": "(", "₎": ")" };
+  const SUP_DIGIT = { "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9", "⁺": "+", "⁻": "-" };
+  const SUP_CLASS = "[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]";
+  const SUB_CLASS = "[₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎]";
+  const SUP_RE = new RegExp(SUP_CLASS, "g");
+  const SUB_RE = new RegExp(SUB_CLASS, "g");
+  const normQ = (t) => stripHtml(t).toLowerCase().replace(SUB_RE, (c) => SUB_DIGIT[c] || c).replace(SUP_RE, (c) => SUP_DIGIT[c] || c).replace(/\s+/g, " ").slice(0, 140);
   const optText = (o) => stripHtml(typeof o === "string" ? o : (o?.text || o?.answer || ""));
 
   /* ================= normalisasi soal ================= */
@@ -158,6 +164,8 @@
   .zulfa-card{background:#1a1e24!important;border:1px solid #232833!important;border-left:3px solid #3b4252!important;border-radius:7px!important;padding:7px!important}
   .zulfa-qhead{display:flex!important;align-items:center!important;gap:6px!important;margin-bottom:3px!important;color:#7d8592!important;font-size:11px!important}
   .zulfa-tag{background:#232833!important;color:#8b93a1!important;font-size:9px!important;font-weight:700!important;padding:1px 6px!important;border-radius:4px!important;letter-spacing:.03em!important}
+  .zulfa-tagcur{background:#173d29!important;color:#4ade80!important;box-shadow:0 0 0 1px rgba(34,197,94,.5)!important}
+  .zulfa-card.zulfa-cur{border-left:3px solid #22c55e!important;background:#161d1a!important}
   .zulfa-q{font-weight:500!important;margin-bottom:5px!important;line-height:1.4!important;color:#d1d5db!important}
   .zulfa-qimg,.zulfa-aimg{max-width:100%!important;border-radius:6px!important;margin-top:4px!important;opacity:.9!important}
   .zulfa-ans{background:#14201a!important;border:1px solid #1e3a2c!important;color:#7ee2a8!important;font-weight:600!important;border-radius:6px!important;padding:5px 7px!important;margin-top:4px!important;line-height:1.4!important}
@@ -169,7 +177,11 @@
   .zulfa-mark{pointer-events:none!important}
   .zulfa-dot{pointer-events:none!important}
   @keyframes zulfaPulse{0%,100%{opacity:.55;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
-  .zulfa-ans.zulfa-correct{border:2px solid rgba(34,197,94,var(--zulfa-ans-op,1))!important;background:#0f1a13!important;color:#86efac!important;box-shadow:0 0 0 1px rgba(34,197,94,calc(var(--zulfa-ans-op,1) * .25))!important}
+  .zulfa-ans.zulfa-correct{border:2px solid rgba(34,197,94,var(--zulfa-ans-op,1))!important;background:#0f1a13!important;color:#86efac!important;box-shadow:0 0 0 1px rgba(34,197,94,calc(var(--zulfa-ans-op,1) * .25))!important;display:flex!important;align-items:center!important;gap:6px!important}
+  .zulfa-abadge{flex:0 0 auto!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;width:15px!important;height:15px!important;border-radius:50%!important;background:rgba(34,197,94,var(--zulfa-ans-op,1))!important;color:#04140a!important;font-size:10px!important;font-weight:900!important;line-height:1!important}
+  .zulfa-anum{flex:0 0 auto!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;width:16px!important;height:16px!important;border-radius:4px!important;background:rgba(34,197,94,.16)!important;border:1px solid rgba(34,197,94,var(--zulfa-ans-op,1))!important;color:#86efac!important;font-size:10px!important;font-weight:900!important;line-height:1!important}
+  .zulfa-atxt{flex:1 1 auto!important;min-width:0!important}
+  .zulfa-aopt{flex:0 0 auto!important;font-size:8px!important;font-weight:800!important;letter-spacing:.05em!important;color:#4ade80!important;opacity:calc(var(--zulfa-ans-op,1) * .9)!important;border:1px solid rgba(34,197,94,.45)!important;border-radius:3px!important;padding:1px 4px!important;white-space:nowrap!important}
   #zulfa-fab{position:fixed!important;bottom:14px!important;left:14px!important;width:12px!important;height:12px!important;border-radius:50%!important;border:none!important;background:#9ca3af!important;opacity:.45!important;padding:0!important;font-size:0!important;line-height:0!important;cursor:pointer!important;z-index:2147483647!important;display:block!important;box-shadow:none!important;transition:opacity .15s,transform .15s!important}
   #zulfa-fab:hover{opacity:1!important;transform:scale(1.6)!important;background:#6b7280!important}
   #zulfa-resize{position:absolute!important;right:0!important;bottom:0!important;width:16px!important;height:16px!important;cursor:nwse-resize!important;z-index:5!important;background:linear-gradient(135deg,transparent 50%,#4b5563 50%)!important;border-bottom-right-radius:10px!important}
@@ -410,25 +422,39 @@
       return q.includes(f) || a.includes(f);
     });
     if (!list.length) { els.results.innerHTML = `<div class="zulfa-empty">${state.items.length ? "Tidak cocok." : "Belum ada soal. Join game dulu."}</div>`; return; }
+    const curIt = currentItem();
+    if (curIt && list.length > 1) {
+      const idx = list.indexOf(curIt);
+      if (idx > 0) list = [list[idx], ...list.slice(0, idx), ...list.slice(idx + 1)];
+    }
     els.results.innerHTML = list.map((it, i) => {
       const qMedia = it.questionMedia ? `<br><img class="zulfa-qimg" src="${esc(it.questionMedia)}" loading="lazy" />` : "";
       const tag = it.ai ? "AI ✨" : esc(it.tag || it.type || "");
+      const isCur = it === curIt;
+      const optIdx = (t) => { const nt = normMatch(t); const oi = (it.options || []).findIndex((o) => normMatch(o) === nt); return oi >= 0 ? oi + 1 : 0; };
       const ans = it.pending && !it.answers.length ? `<div class="zulfa-ans zulfa-pending">⏳ menunggu…</div>`
         : it.answers.length ? it.answers.map((a) => {
             const img = a.mediaUrl ? `<br><img class="zulfa-aimg" src="${esc(a.mediaUrl)}" loading="lazy" />` : "";
-            return `<div class="zulfa-ans zulfa-correct" data-ans="${esc(a.text)}">${cleanHtml(a.text)}${img}</div>`;
+            const n = optIdx(a.text);
+            const num = n ? `<span class="zulfa-anum">${n}</span>` : "";
+            const hit = n ? `<span class="zulfa-aopt">OPSI ${n}</span>` : "";
+            return `<div class="zulfa-ans zulfa-correct" data-ans="${esc(a.text)}">${num}<span class="zulfa-abadge">✓</span><span class="zulfa-atxt">${cleanHtml(a.text)}${img}</span>${hit}</div>`;
           }).join("")
         : `<div class="zulfa-ans zulfa-none">—</div>`;
       const eye = it.answers.length ? `<button type="button" class="zulfa-eyebtn" title="Lihat / samarkan jawaban">${state.reveal ? "SEMBUNYI" : "LIHAT"}</button>` : "";
-      return `<div class="zulfa-card"><div class="zulfa-qhead"><b>${i + 1}.</b> <span class="zulfa-tag">${tag}</span>${eye}</div><div class="zulfa-q">${cleanHtml(it.question) || "<i>(soal gambar — lihat highlight)</i>"}${qMedia}</div>${ans}</div>`;
+      return `<div class="zulfa-card${isCur ? " zulfa-cur" : ""}"><div class="zulfa-qhead"><b>${i + 1}.</b> <span class="zulfa-tag">${tag}</span>${isCur ? '<span class="zulfa-tag zulfa-tagcur">SEKARANG</span>' : ""}${eye}</div><div class="zulfa-q">${cleanHtml(it.question) || "<i>(soal gambar — lihat highlight)</i>"}${qMedia}</div>${ans}</div>`;
     }).join("");
     els.results.querySelectorAll("img").forEach((img) => { img.referrerPolicy = "no-referrer"; });
+    applyAnsOpacity();
+    const curCard = els.results.querySelector(".zulfa-card.zulfa-cur");
+    if (curCard) { try { curCard.scrollIntoView({ block: "nearest" }); } catch {} }
   }
   const commentSafe = (t) => String(t || "").replace(/[<>]/g, "");
   function applyAnsOpacity() {
     const r = els.results || document.getElementById("zulfa-results");
-    if (!r) return;
-    try { r.style.setProperty("--zulfa-ans-op", String(state.ansOpacity)); } catch {}
+    const root = document.documentElement;
+    try { if (r) r.style.setProperty("--zulfa-ans-op", String(state.ansOpacity)); } catch {}
+    try { if (root) root.style.setProperty("--zulfa-ans-op", String(state.ansOpacity)); } catch {}
   }
 
   /* ================= merge / set ================= */
@@ -463,7 +489,15 @@
   /* ================= highlight di halaman ================= */
   const KAHOOT_Q_SEL = '[data-functional-selector="question-title"],[data-functional-selector="block-title"],[data-functional-selector*="question-title"]';
   const OPT_SEL = '[data-cy^="option-"],[data-functional-selector="answer-option"],[data-functional-selector^="question-choice"],button[data-functional-selector*="answer"],button[data-functional-selector*="choice"]';
-  const normMatch = (s) => { let t = stripHtml(s).replace(/−/g, "-"); t = t.replace(/\^?\\circ/g, "°").replace(/\\mathrm\{([^}]*)\}/g, "$1"); t = t.replace(/[\\${}]/g, ""); return t.toLowerCase().replace(/\s+/g, ""); };
+  const normMatch = (s) => {
+    let t = stripHtml(s).replace(/−/g, "-");
+    t = t.replace(/\^?\\circ/g, "°").replace(/\\mathrm\{([^}]*)\}/g, "$1");
+    t = t.replace(/[\\${}]/g, "");
+    t = t.replace(SUB_RE, (c) => SUB_DIGIT[c] || c);
+    t = t.replace(SUP_RE, (c) => SUP_DIGIT[c] || c);
+    t = t.replace(/[–—]/g, "-").replace(/["'“”`]/g, "").replace(/·|×/g, "");
+    return t.toLowerCase().replace(/\s+/g, "");
+  };
   function btnText(btn) {
     try {
       const anns = [...btn.querySelectorAll("annotation")].map((a) => (a.textContent || "").trim()).filter(Boolean);
@@ -496,22 +530,32 @@
         const opts = new Set((it.options || []).map(normMatch).filter(Boolean));
         let score = 0;
         if (sQ && normQ(it.question) === sQ) score += 100;
-        if (opts.size) score += btns.filter((t) => opts.has(t)).length;
+        if (opts.size && btns.length) score += Math.min(20, btns.filter((t) => opts.has(t)).length * 4);
         if (score > bestScore) { bestScore = score; best = it; }
       }
-      return bestScore > 0 ? best : null;
+      return bestScore >= 8 ? best : null;
     } catch { return null; }
   }
+  let lastHlSig = "";
   function markHit(btn, rank = 0) {
     const target = btn.closest("button") || btn;
     if (isOwnEl(target)) return;
     if (target.dataset.zulfaTag) return;
     target.dataset.zulfaTag = "1";
+    try {
+      const p = (k, v) => target.style.setProperty(k, v, "important");
+      p("outline", "3px solid rgba(34,197,94,var(--zulfa-ans-op,1))");
+      p("outline-offset", "-3px");
+      p("box-shadow", "inset 0 0 0 3px rgba(34,197,94,var(--zulfa-ans-op,1)), inset 0 0 60px rgba(34,197,94,calc(var(--zulfa-ans-op,1) * .35))");
+      if (getComputedStyle(target).position === "static") p("position", "relative");
+    } catch {}
   }
   function unmarkAll() {
-    document.querySelectorAll(".zulfa-dot,.zulfa-mark").forEach((n) => n.remove());
+    lastHlSig = "";
+    document.querySelectorAll(".zulfa-dot,.zulfa-mark,.zulfa-pagecor").forEach((n) => n.remove());
     document.querySelectorAll("[data-zulfa-tag]").forEach((n) => {
       n.removeAttribute("data-zulfa-tag");
+      ["outline", "outline-offset", "box-shadow", "transition"].forEach((k) => { try { n.style.removeProperty(k); } catch {} });
     });
   }
   let hlRafId = 0;
