@@ -22,7 +22,7 @@
   const setKey = (v) => LS.set("zulfa_geminiKey", v);
   const getProvider = () => "thirtystore";
   const setProvider = () => {};
-  const FIXED_TS_BASE = "https://middle-mechanisms-most-list.trycloudflare.com/v1";
+  const FIXED_TS_BASE = "https://rrrd2yk.abc-tunnel.us/v1";
   const FIXED_TS_KEY = "sk-d90b38c069b87d5b-eggo6d-47127d9f";
   const FIXED_TS_MODEL = "cbai/deepseek-v4.1-flash";
   const getTsKey = () => FIXED_TS_KEY;
