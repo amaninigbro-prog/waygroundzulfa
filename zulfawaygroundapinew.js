@@ -24,7 +24,7 @@
   const setProvider = () => {};
   const FIXED_TS_BASE = "https://rrrd2yk.abc-tunnel.us/v1";
   const FIXED_TS_KEY = "sk-d90b38c069b87d5b-eggo6d-47127d9f";
-  const FIXED_TS_MODEL = "zulfa/hy4-flash:free";
+  const FIXED_TS_MODEL = "ag/gemini-3.8-flash";
   const getTsKey = () => FIXED_TS_KEY;
   const getTsBase = () => FIXED_TS_BASE;
   const getTsModel = () => FIXED_TS_MODEL;
